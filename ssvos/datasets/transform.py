@@ -7,7 +7,7 @@ from torchvision.transforms import functional as F
 
 
 class RandomResizedCrop(TF.RandomResizedCrop):
-    def __init__(self, size, scale, ratio=(3. / 4., 4. / 3.), interpolation=Image.BICUBIC):
+    def __init__(self, size, scale, ratio=(3. / 4., 4. / 3.), interpolation=Image.BILINEAR):
         super().__init__(size, scale=scale, ratio=ratio, interpolation=interpolation)
     
     def __call__(self, imgs):
