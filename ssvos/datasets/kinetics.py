@@ -2,6 +2,7 @@
 from torch.utils.data import Dataset
 from .utils import VideoLoader
 import os
+import random
 from .transform import RandomResizedCrop, RandomHorizontalFlip, VideoToTensor, VideoNormalize
 from torchvision.transforms import Compose
 
@@ -14,7 +15,7 @@ class Kinetics(Dataset):
         self.video_loader = VideoLoader(n_frames, video_loader_threads)
         if transforms is None:
             self.transforms = Compose([
-                RandomResizedCrop(size=(224, 224), scale=(0.5, 1.0)),
+                RandomResizedCrop(size=(224, 224), scale=(0.6, 1.0)),
                 RandomHorizontalFlip(),
                 VideoToTensor(),
                 VideoNormalize(mean=[0.485, 0.456, 0.406], std=[0.228, 0.224, 0.225])
@@ -31,6 +32,7 @@ class Kinetics(Dataset):
         # Note that here we use distant sampling discribed in "
         # Rethinking Self-supervised Correspondence Learning: A Video Frame-level Similarity Perspective"
         frames = self.video_loader(video_path)
+        random.shuffle(frames)
         online_frames = frames[:self.n_frames//2]
         target_frames = frames[self.n_frames//2:]
         return self.transforms(online_frames), self.transforms(target_frames)

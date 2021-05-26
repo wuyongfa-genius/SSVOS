@@ -70,6 +70,14 @@ class MLP(nn.Module):
                 nn.Linear(hidden_dim[1], out_dim),
                 nn.BatchNorm1d(out_dim, affine=False)
             )
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.BatchNorm1d):
+            if m.weight is not None:
+                nn.init.constant_(m.weight, 1)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         return self.mlp(x)

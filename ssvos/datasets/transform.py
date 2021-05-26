@@ -11,10 +11,10 @@ class RandomResizedCrop(TF.RandomResizedCrop):
         super().__init__(size, scale=scale, ratio=ratio, interpolation=interpolation)
     
     def __call__(self, imgs):
-        i, j, h, w = self.get_params(imgs[0], self.scale, self.ratio)
+        # i, j, h, w = self.get_params(imgs[0], self.scale, self.ratio)
         transformed_imgs = []
         for img in imgs:
-            transformed_imgs.append(F.resized_crop(img, i, j, h, w, self.size, self.interpolation))
+            transformed_imgs.append(super().__call__(img))
         return transformed_imgs
 
 
@@ -23,12 +23,11 @@ class RandomHorizontalFlip(TF.RandomHorizontalFlip):
         super().__init__(p=p)
     
     def __call__(self, imgs):
-        if torch.rand(1) < self.p:
-            transformed_imgs = []
-            for img in imgs:
-                transformed_imgs.append(F.hflip(img))
-            return transformed_imgs
-        return imgs
+        # if torch.rand(1) < self.p:
+        transformed_imgs = []
+        for img in imgs:
+            transformed_imgs.append(super().forward(img))
+        return transformed_imgs
 
 
 class RGB2LAB(object):
