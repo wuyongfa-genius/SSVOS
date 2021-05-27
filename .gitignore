@@ -133,3 +133,6 @@ dmypy.json
 
 # logs
 exps
+
+# davis evaluation
+davis2017-evaluation

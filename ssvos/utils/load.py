@@ -17,15 +17,25 @@ def load_checkpoint(model, ckpt_path, map_location='cpu', finetune=False, logger
 
 def load_encoder(model, state_dict, **kwargs):
     pretrained_encoder_key = kwargs['pretrained_encoder_key']
-    model_encoder_key = kwargs['model_encoder_key']
+    model_encoder_key = kwargs.get('model_encoder_key', None)
+    accelerator = kwargs.get('accelerator', None)
     encoder_dict = {}
     for k, v in state_dict.items():
         if pretrained_encoder_key in k:
             start = len(pretrained_encoder_key)+1
             encoder_dict[k[start:]] = v
-    assert hasattr(model, model_encoder_key)
-    encoder = getattr(model, model_encoder_key)
-    encoder.load_state_dict(encoder_dict, strict=False)
+    if model_encoder_key is None:
+        missing_keys, unexpected_keys = model.load_state_dict(encoder_dict, strict=False)
+    else:
+        assert hasattr(model, model_encoder_key)
+        encoder = getattr(model, model_encoder_key)
+        missing_keys, unexpected_keys = encoder.load_state_dict(encoder_dict, strict=False)
+    if accelerator is not None:
+        accelerator.print(f"Missing keys: {missing_keys}")
+        accelerator.print(f"Unexpected keys: {unexpected_keys}")
+    else:
+        print(f"Missing keys: {missing_keys}")
+        print(f"Unexpected keys: {unexpected_keys}")
 
 def load_pretrained_weights(model, pretrained_weights, checkpoint_key='teacher', model_name='deit_small', patch_size=8):
     if os.path.isfile(pretrained_weights):

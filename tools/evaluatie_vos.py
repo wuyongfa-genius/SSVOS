@@ -24,12 +24,12 @@ from tqdm import tqdm
 
 import cv2
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.nn import functional as F
 from PIL import Image
-from torchvision import transforms
 from ssvos.datasets.utils import default_palette, imwrite_indexed
-
+from ssvos.models.backbones.torchvision_resnet import resnet18, BasicBlock, resnet_encoder
+from ssvos.utils.load import load_encoder
 
 @torch.no_grad()
 def eval_video_tracking_davis(args, model, frame_list, video_dir, first_seg, seg_ori, color_palette=default_palette):
@@ -68,7 +68,7 @@ def eval_video_tracking_davis(args, model, frame_list, video_dir, first_seg, seg
         que.put([feat_tar, seg])
 
         # upsampling & argmax
-        frame_tar_avg = F.interpolate(frame_tar_avg, scale_factor=args.patch_size, mode='bilinear', align_corners=False, recompute_scale_factor=False)[0]
+        frame_tar_avg = F.interpolate(frame_tar_avg, scale_factor=args.out_stride, mode='bilinear', align_corners=False, recompute_scale_factor=False)[0]
         frame_tar_avg = norm_mask(frame_tar_avg)
         _, frame_tar_seg = torch.max(frame_tar_avg, dim=0)
 
@@ -150,16 +150,19 @@ def label_propagation(args, model, frame_tar, list_frame_feats, list_segs, mask_
 def extract_feature(model, frame, return_h_w=False):
     """Extract one frame feature everytime."""
     ## Define the way your model extract feature here ##############################################
-    out = model.get_intermediate_layers(frame.unsqueeze(0).cuda(), n=1)[0]
-    out = out[:, 1:, :]  # we discard the [CLS] token
-    h, w = int(frame.shape[1] / model.patch_embed.patch_size), int(frame.shape[2] / model.patch_embed.patch_size)
-    dim = out.shape[-1]
-    out = out[0].reshape(h, w, dim)
+    # out = model.get_intermediate_layers(frame.unsqueeze(0).cuda(), n=1)[0]
+    # out = out[:, 1:, :]  # we discard the [CLS] token
+    # h, w = int(frame.shape[1] / model.patch_embed.patch_size), int(frame.shape[2] / model.patch_embed.patch_size)
+    # dim = out.shape[-1]
+    # out = out[0].reshape(h, w, dim)
+    feat = model(frame.unsqueeze(0).cuda()) # B,C,H,W
+    feat = feat[0].permute(1,2,0) # H,W,C
+    h, w, dim = feat.shape
     ##################################################################################
-    out = out.reshape(-1, dim)
+    feat = feat.reshape(-1, dim)
     if return_h_w:
-        return out, h, w
-    return out
+        return feat, h, w
+    return feat
 
 
 def to_one_hot(y_tensor, n_dims=None):
@@ -240,36 +243,37 @@ def color_normalize(x, mean=[0.485, 0.456, 0.406], std=[0.228, 0.224, 0.225]):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Evaluation with video object segmentation on DAVIS 2017')
     parser.add_argument('--pretrained_weights', default='', type=str, help="Path to pretrained weights to evaluate.")
-    parser.add_argument('--arch', default='deit_small', type=str,
-        choices=['deit_tiny', 'deit_small', 'vit_base'], help='Architecture (support only ViT atm).')
-    parser.add_argument('--patch_size', default=16, type=int, help='Patch resolution of the model.')
-    parser.add_argument("--checkpoint_key", default="teacher", type=str, help='Key to use in the checkpoint (example: "teacher")')
+    parser.add_argument('--arch', default='resnet18', type=str,
+        choices=['deit_tiny', 'deit_small', 'vit_base', 'resnet18'], help='Architecture (support only ViT atm).')
+    parser.add_argument('--out_stride', default=8, type=int, help='Patch resolution of the model.')
+    parser.add_argument("--encoder_key", default="online_encoder.encoder", type=str, help='Key to use in the checkpoint (example: "teacher")')
     parser.add_argument('--output_dir', default=".", help='Path where to save segmentations')
-    parser.add_argument('--data_path', default='/path/to/davis/', type=str)
-    parser.add_argument("--n_last_frames", type=int, default=7, help="number of preceeding frames")
+    parser.add_argument('--data_path', default='/data/datasets/DAVIS', type=str)
+    parser.add_argument("--n_last_frames", type=int, default=5, help="number of preceeding frames")
     parser.add_argument("--size_mask_neighborhood", default=12, type=int,
         help="We restrict the set of source nodes considered to a spatial neighborhood of the query node")
     parser.add_argument("--topk", type=int, default=5, help="accumulate label from top k neighbors")
     # parser.add_argument("--bs", type=int, default=6, help="Batch size, try to reduce if OOM")
     args = parser.parse_args()
 
-    model = None
     ## Build your own network here ####################################################################
-    # model = vits.__dict__[args.arch](patch_size=args.patch_size, num_classes=0)
-    # print(f"Model {args.arch} {args.patch_size}x{args.patch_size} built.")
-    # model.cuda()
-    # utils.load_pretrained_weights(model, args.pretrained_weights, args.checkpoint_key, args.arch, args.patch_size)
-    # for param in model.parameters():
-    #     param.requires_grad = False
-    # model.eval()
+    if args.arch=='resnet18':
+        model = resnet_encoder(resnet18())
+        ckpt = torch.load(args.pretrained_weights, map_location='cpu')
+        load_encoder(model, ckpt['state_dict'],
+                     pretrained_encoder_key=args.encoder_key)
+    model = model.cuda()
+    for param in model.parameters():
+        param.requires_grad = False
+    model.eval()
     ###########################################################################################
 
     video_list = open(os.path.join(args.data_path, "ImageSets/2017/val.txt")).readlines()
-    for i, video_name in enumerate(video_list):
+    for i, video_name in enumerate(video_list[-1:]):
         video_name = video_name.strip()
         print(f'[{i}/{len(video_list)}] Begin to segmentate video {video_name}.')
         video_dir = os.path.join(args.data_path, "JPEGImages/480p/", video_name)
         frame_list = read_frame_list(video_dir)
         seg_path = frame_list[0].replace("JPEGImages", "Annotations").replace("jpg", "png")
-        first_seg, seg_ori = read_seg(seg_path, args.patch_size)
+        first_seg, seg_ori = read_seg(seg_path, args.out_stride)
         eval_video_tracking_davis(args, model, frame_list, video_dir, first_seg, seg_ori)

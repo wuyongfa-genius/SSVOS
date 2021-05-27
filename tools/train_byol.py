@@ -61,17 +61,17 @@ def main():
     train_dataloader = DataLoader(train_dataset, batch_size=args.samples_per_gpu,
                                   shuffle=True, num_workers=args.num_workers, pin_memory=True)
 
-    ## define model
+    # define model
     model = BYOL(resnet18(zero_init_residual=True), feat_dim=512, projector_hidden_dim=[
         2048, 2048], out_dim=2048, predictor_hidden_dim=512, simsiam=True)
     # optimizer
     init_lr = args.base_lr*dist.get_world_size()*args.samples_per_gpu/256
     optimizer = optim.SGD(model.parameters(), lr=init_lr,
                           weight_decay=1e-4, momentum=0.9)
-    ## recover states
+    # recover states
     start_epoch = 1
     if args.resume is not None:
-        ckpt = torch.load(args.resume, map_location='cpu')
+        ckpt: dict() = torch.load(args.resume, map_location='cpu')
         model.load_state_dict(ckpt['state_dict'])
         optimizer.load_state_dict(ckpt['optimizer'])
         start_epoch = ckpt['epoch']+1
@@ -88,6 +88,7 @@ def main():
     # lr_scheduler
     total_steps = len(train_dataloader)*args.epochs
     lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, total_steps)
+    lr_scheduler.step(len(train_dataloader)*(start_epoch-1))
     # training
     for e in range(start_epoch, args.epochs+1):
         model.train()
@@ -124,7 +125,8 @@ def main():
             if e % args.save_interval == 0:
                 save_path = os.path.join(args.log_dir, f'epoch_{e}.pth')
                 torch.save(
-                    {'state_dict': model.module.state_dict(), 'epoch': e, 'args': args, 'optimizer': optimizer.state_dict()}, save_path)
+                    {'state_dict': model.module.state_dict(), 'epoch': e, 'args': args,
+                        'optimizer': optimizer.state_dict()}, save_path)
                 logger.info(f"Checkpoint has been saved at {save_path}")
 
 

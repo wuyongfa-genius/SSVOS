@@ -2,6 +2,7 @@
 """
 import torch
 import torch.nn as nn
+from einops.layers.torch import Rearrange
 # from .utils import load_state_dict_from_url
 
 
@@ -157,6 +158,7 @@ class ResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2,
                                     dilate=replace_stride_with_dilation[2])
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.flatten = Rearrange('b c 1 1 -> b c')
         self.fc = nn.Linear(512 * block.expansion, num_classes)
 
         for m in self.modules():
@@ -213,7 +215,7 @@ class ResNet(nn.Module):
         x = self.layer4(x)
 
         x = self.avgpool(x)
-        x = torch.flatten(x, 1)
+        x = self.flatten(x)
         x = self.fc(x)
         return x
 
@@ -348,3 +350,35 @@ def wide_resnet101_2(pretrained=False, progress=True, **kwargs):
     kwargs['width_per_group'] = 64 * 2
     return _resnet('wide_resnet101_2', Bottleneck, [3, 4, 23, 3],
                    pretrained, progress, **kwargs)
+
+## Modified resnet with output stride decreased.
+def resnet_encoder(model, out_layer='layer3', out_block='1', remove_stride_at_out_layer=True, block_type='Basic', **kwargs)->nn.Module:
+    if block_type=='Basic':
+        inplanes_list = [64, 64, 128, 256]
+        outplanes_list = [64, 128, 256, 512]
+        block_module = BasicBlock
+    elif block_type=='Bottleneck':
+        inplanes_list = [64, 256, 512, 1024]
+        outplanes_list = [256, 512, 1024, 2048]
+        block_module = Bottleneck
+    ## modify model so that its output stride is out_stride
+    # make all layers behind out_layer Identity
+    layer_index = int(out_layer[-1])
+    for i in range(4-layer_index):
+        setattr(model, f'layer{i+layer_index+1}', nn.Identity())
+    # remake layer so that it has `out_blocak` blocks
+    block_num = int(out_block)
+    model.inplanes = inplanes_list[layer_index-1]
+    stride = 1 if remove_stride_at_out_layer else 2
+    setattr(model, out_layer, model._make_layer(block_module, outplanes_list[layer_index-1], blocks=block_num, stride=stride))
+    ## set pooling and fc to None
+    setattr(model, 'avgpool', nn.Identity())
+    setattr(model, 'flatten', nn.Identity())
+    setattr(model, 'fc', nn.Identity())
+    return model
+
+
+## 
+# if __name__=="__main__":
+#     model = resnet_encoder(resnet18())
+#     print(model)
