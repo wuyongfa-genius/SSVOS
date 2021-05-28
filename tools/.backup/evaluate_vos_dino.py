@@ -244,7 +244,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Evaluation with video object segmentation on DAVIS 2017')
     parser.add_argument('--pretrained_weights', default='', type=str, help="Path to pretrained weights to evaluate.")
     parser.add_argument('--arch', default='resnet18', type=str,
-        choices=['deit_tiny', 'deit_small', 'vit_base', 'resnet18'], help='Architecture (support only ViT atm).')
+        choices=['deit_tiny', 'deit_small', 'vit_base', 'deit_small'], help='Architecture (support only ViT atm).')
     parser.add_argument('--out_stride', default=8, type=int, help='Patch resolution of the model.')
     parser.add_argument("--encoder_key", default="online_encoder.encoder", type=str, help='Key to use in the checkpoint (example: "teacher")')
     parser.add_argument('--output_dir', default=".", help='Path where to save segmentations')

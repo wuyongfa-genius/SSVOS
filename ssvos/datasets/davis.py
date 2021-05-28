@@ -1,5 +1,6 @@
 import os
 import torch
+from torch.nn import functional as F
 import numpy as np
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor, Normalize, Compose
@@ -46,17 +47,6 @@ class DAVIS_VAL(Dataset):
             return self.transforms(img)
     
     def _read_seg(self, seg_path, factor, scale_size=[480]):
-        def to_one_hot(y_tensor, n_dims=None):
-            """
-            Take integer y (tensor or variable) with n dims &
-            convert it to 1-hot representation with n+1 dims.
-            """
-            _,h,w = y_tensor.size()
-            y_tensor = y_tensor.type(torch.LongTensor).view(-1, 1)
-            n_dims = n_dims or (int(torch.max(y_tensor)) + 1)
-            y_one_hot = torch.zeros(y_tensor.size()[0], n_dims).scatter_(1, y_tensor, 1)
-            y_one_hot = y_one_hot.view(h, w, n_dims)
-            return y_one_hot.permute(2, 0, 1) # CHW
         seg = Image.open(seg_path)
         _w, _h = seg.size # note PIL.Image.Image's size is (w, h)
         if len(scale_size) == 1:
@@ -72,8 +62,8 @@ class DAVIS_VAL(Dataset):
             _th = scale_size[1]
             _tw = scale_size[0]
         small_seg = np.array(seg.resize((_tw // factor, _th // factor), 0))
-        small_seg = torch.from_numpy(small_seg.copy()).contiguous().float().unsqueeze(0)
-        return to_one_hot(small_seg), torch.from_numpy(np.array(seg))
+        small_seg = F.one_hot(torch.from_numpy(small_seg).type(torch.LongTensor), num_classes=int(np.max(small_seg))+1) # HWC
+        return small_seg.permute(2,0,1).float(), torch.from_numpy(np.array(seg))
 
     def __getitem__(self, index: int):
         seq_name = self.seq_names[index]

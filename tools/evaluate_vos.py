@@ -1,8 +1,6 @@
 """Evaluation script on VOS datasets. Support multi-gpu test."""
 import argparse
-import copy
 import os
-import queue
 
 import numpy as np
 import torch
@@ -11,7 +9,7 @@ from einops import rearrange
 from PIL import Image
 from spatial_correlation_sampler import spatial_correlation_sample
 from ssvos.datasets.davis import DAVIS_VAL
-from ssvos.datasets.utils import default_palette, imwrite_indexed
+from ssvos.datasets.utils import default_palette, imwrite_indexed, norm_mask
 from ssvos.models.backbones.torchvision_resnet import resnet18, resnet_encoder
 from ssvos.utils.load import load_encoder
 from torch.nn import functional as F
@@ -40,126 +38,48 @@ def add_args():
                         help="We restrict the set of source nodes considered to a spatial neighborhood of the query node")
     parser.add_argument("--topk", type=int, default=5,
                         help="accumulate label from top k neighbors")
-    parser.add_argument("--use_correlation_sampler", action='store_true',
-                        help="Whether to use correlation sampler")
-    parser.add_argument("--bs", type=int, default=1,
-                        help="Batch size, try to reduce if OOM")
+    parser.add_argument("--propagation_type", default='soft', choices=['soft', 'hard'],
+                        help="Whether to quantize the predicted seg. `hard` means quantize.")
     return parser.parse_args()
 
 
-def norm_mask(mask):
-    c, h, w = mask.shape
-    for cnt in range(c):
-        mask_cnt = mask[cnt, :, :]
-        if(mask_cnt.max() > 0):
-            mask_cnt = (mask_cnt - mask_cnt.min())
-            mask_cnt = mask_cnt/mask_cnt.max()
-            mask[cnt, :, :] = mask_cnt
-    return mask
-
-
-@torch.no_grad()
-def extract_seq_feats(model, frames, bs=1):
-    seq_feats = []
-    for i in range(0, len(frames), bs):
-        if not i+bs > len(frames):
-            this_batch = frames[i:i+bs]
-        else:
-            this_batch = frames[i:]
-        if isinstance(this_batch, list):
-            this_batch = torch.cat(this_batch)
-        ##Define the way your model extract feature here#########################################
-        this_batch_feats = model(this_batch)  # BCHW
-        ############################################################################
-        seq_feats.append(this_batch_feats)
-    return torch.cat(seq_feats)  # NCHW
-
 def extract_feat(model, frame):
+    """Extract one frame feature and L2-normalize it."""
     with torch.no_grad():
-        feat = model(frame)
-    return feat # BCHW
+        ##Define the way your model extract feature here########################################
+        feat = model(frame)  # BCHW
+        ############################################################################
+    feat = F.normalize(feat, p=2, dim=1)
+    return feat  # BCHW
 
-def _propagate_label(feat_tar, preceding_feats, preceding_segs, radius, device, topk=5, mask_neighborhood=None):
-    def restrict_neighborhood(h, w, radius, device):
-        # We restrict the set of source nodes considered to a spatial neighborhood of the query node (i.e. ``local attention'')
-        mask = torch.zeros(h, w, h, w, device=device)
-        for i in range(h):
-            for j in range(w):
-                for p in range(2 * radius + 1):
-                    for q in range(2 * radius + 1):
-                        if i - radius + p < 0 or i - radius + p >= h:
-                            continue
-                        if j - radius + q < 0 or j - radius + q >= w:
-                            continue
-                        mask[i, j, i - radius + p, j - radius + q] = 1
-        mask = mask.reshape(h * w, h * w)
-        return mask
-    # compute affinity
-    ncontext = len(preceding_feats)
-    feat_sources = torch.cat(preceding_feats)  # NCHW
-    # nmb_context x dim x h*w
-    feat_sources = rearrange(feat_sources, 'n c h w -> n c (h w)')
-    h, w = feat_tar.shape[-2:]
-    feat_tar = rearrange(feat_tar, '1 c h w -> (h w) c')
-    feat_tar = F.normalize(feat_tar, dim=1, p=2)
-    feat_sources = F.normalize(feat_sources, dim=1, p=2)
-    feat_tar = feat_tar.unsqueeze(0).repeat(ncontext, 1, 1)
-    # nmb_context x h*w (tar: query) x h*w (source: keys)
-    aff = torch.exp(torch.bmm(feat_tar, feat_sources) / 0.1)
-    # mask neighborhood
-    if radius > 0:
-        if mask_neighborhood is None:
-            mask_neighborhood = restrict_neighborhood(
-                h, w, radius=radius, device=device)
-            mask_neighborhood = mask_neighborhood.unsqueeze(
-                0).repeat(ncontext, 1, 1)
-        aff *= mask_neighborhood
+
+def propagate_label(feat_tar, preceding_feats, preceding_segs, radius, topk=5, quantize_seg=False):
+    aff = []
+    for feat_s in preceding_feats:
+        corr = spatial_correlation_sample(
+            feat_tar, feat_s, patch_size=2*radius+1)  # BPPHW
+        aff.append(corr)
     # prepare affinity
-    # nmb_context*h*w (source: keys) x h*w (tar: queries)
-    aff = rearrange(aff, 'n q k -> (n k) q')
-    tk_val, _ = torch.topk(aff, dim=0, k=topk)
-    tk_val_min, _ = torch.min(tk_val, dim=0)
+    aff = torch.stack(aff)  # NBPPHW
+    n, b, p, p, h, w = aff.shape
+    aff = rearrange(aff, 'n b p1 p2 h w -> b (n p1 p2) h w')
+    aff = torch.exp(aff/0.07)  # temperature
+    tk_val, _ = torch.topk(aff, dim=1, k=topk)
+    tk_val_min, _ = torch.min(tk_val, dim=1)
     aff[aff < tk_val_min] = 0
-    aff = aff / torch.sum(aff, keepdim=True, axis=0)
+    aff = aff / torch.sum(aff, keepdim=True, axis=1)
     # prepare segs
     segs = torch.cat(preceding_segs)  # NCHW
-    segs = rearrange(segs, 'n c h w -> c (n h w)')
-    seg_tar = torch.mm(segs, aff)
-    seg_tar = rearrange(seg_tar, 'c (h w) -> 1 c h w', h=h, w=w)  # 1CHW
-    return seg_tar, mask_neighborhood
-
-def propagate_label(feat_tar, preceding_feats, preceding_segs, radius, device, topk=5, use_correlation_sampler=False, mask_neighborhood=None):
-    if not use_correlation_sampler:
-        seg_tar, mask_neighborhood = _propagate_label(
-            feat_tar, preceding_feats, preceding_segs, radius, device, topk, mask_neighborhood)
-        return seg_tar, mask_neighborhood
-    else:
-        # feat_sources = torch.stack(preceding_feats)  # NBCHW
-        aff = []
-        for feat_s in preceding_feats:
-            feat_s = F.normalize(feat_s, p=2, dim=1)
-            feat_tar = F.normalize(feat_tar, p=2, dim=1)
-            corr = spatial_correlation_sample(
-                feat_tar, feat_s, patch_size=2*radius+1)  # BPPHW
-            aff.append(corr)
-        # prepare affinity
-        aff = torch.stack(aff)  # NBPPHW
-        n, b, p, p, h, w = aff.shape
-        aff = rearrange(aff, 'n b p1 p2 h w -> b (n p1 p2) h w')
-        # aff = F.softmax(aff/0.1, dim=1)
-        aff = torch.exp(aff/0.1)
-        tk_val, _ = torch.topk(aff, dim=1, k=topk)
-        tk_val_min, _ = torch.min(tk_val, dim=1)
-        aff[aff < tk_val_min] = 0
-        aff = aff / torch.sum(aff, keepdim=True, axis=1)
-        # prepare segs
-        segs = torch.cat(preceding_segs)  # NCHW
-        segs = F.unfold(segs, kernel_size=2*radius+1,
-                        padding=radius)  # N(CKK)(HW)
-        segs = rearrange(
-            segs, 'n (c k1 k2) (h w) -> 1 c (n k1 k2) h w', k1=p, k2=p, h=h, w=w)
-        seg_tar = (aff.unsqueeze(1)*segs).sum(2)  # 1CHW
-        return seg_tar
+    segs = F.unfold(segs, kernel_size=2*radius+1,
+                    padding=radius)  # N(CKK)(HW)
+    segs = rearrange(
+        segs, 'n (c k1 k2) (h w) -> 1 c (n k1 k2) h w', k1=p, k2=p, h=h, w=w)
+    seg_tar = (aff.unsqueeze(1)*segs).sum(2)  # 1CHW
+    if quantize_seg:
+        _seg = torch.argmax(seg_tar, dim=1).squeeze()  # HW
+        quantized_seg = F.one_hot(_seg.long(), num_classes=seg_tar.shape[1])  # HWC
+        return seg_tar, quantized_seg.permute(2, 0, 1).unsqueeze(0).float()  # 1CHW
+    return seg_tar, torch.zeros_like(seg_tar)  # 1CHW
 
 
 def main():
@@ -170,7 +90,6 @@ def main():
     seq_names = dataset.seq_names
     dataloader = DataLoader(dataset, shuffle=False,
                             pin_memory=True, num_workers=1)
-    # model
     ## Build your own network here #########################################################
     if args.arch == 'resnet18':
         model = resnet_encoder(resnet18())
@@ -192,38 +111,34 @@ def main():
         seq_name = seq_names[index]
         seq_dir = os.path.join(args.output_dir, seq_name)
         os.makedirs(seq_dir, exist_ok=True)
-        # saving first segmentation
+        # extract first frame feat and saving first segmentation
         first_feat = extract_feat(model, frames[0])
         out_path = os.path.join(seq_dir, "00000.png")
         imwrite_indexed(out_path, seg_ori[0].cpu().numpy(), default_palette)
         # The queue stores the n preceeding frames
         que = []
         for frame_index in range(1, len(frames)):
+            # extract current frame feat
+            feat_tar = extract_feat(model, frames[frame_index])
             # we use the first segmentation and the n previous ones
             used_frame_feats = [first_feat] + [pair[0]
-                                                 for pair in que]
+                                               for pair in que]
             used_segs = [first_seg] + [pair[1] for pair in que]
             # label propagation
-            feat_tar = extract_feat(model, frames[frame_index])
-            if not args.use_correlation_sampler:
-                mask_neighborhood = None
-                seg_tar, mask_neighborhood = propagate_label(feat_tar, used_frame_feats, used_segs, args.radius,
-                                                             accelerator.device, args.topk, mask_neighborhood=mask_neighborhood)
-            else:
-                seg_tar = propagate_label(feat_tar, used_frame_feats, used_segs, args.radius,
-                                          accelerator.device, args.topk, True)
+            quantize_seg = False if args.propagation_type == 'soft' else True
+            seg_tar, quantized_seg = propagate_label(feat_tar, used_frame_feats, used_segs, args.radius,
+                                                     args.topk, quantize_seg=quantize_seg)
             # pop out oldest frame if neccessary
             if len(que) == args.n_last_frames:
                 del que[0]
             # push current results into queue
-            seg = seg_tar.clone()
+            seg = quantized_seg.clone() if quantize_seg else seg_tar.clone()
             que.append([feat_tar, seg])
             # upsampling & argmax
             seg_tar = F.interpolate(seg_tar, scale_factor=args.out_stride,
-                                    mode='bilinear', align_corners=False, recompute_scale_factor=False)
+                                    mode='bicubic', align_corners=False, recompute_scale_factor=False)
             seg_tar = norm_mask(seg_tar[0])
             seg_tar = torch.argmax(seg_tar, dim=0)
-
             # saving to disk
             seg_tar = seg_tar.cpu().numpy().astype(np.uint8)
             seg_tar = np.array(Image.fromarray(

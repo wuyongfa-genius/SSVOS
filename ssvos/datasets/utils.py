@@ -1,6 +1,7 @@
 from decord import VideoReader
 from PIL import Image
 import random
+import torch
 import numpy as np
 
 
@@ -48,6 +49,28 @@ def imwrite_indexed(filename, array, color_palette=default_palette):
     im = Image.fromarray(array)
     im.putpalette(color_palette.ravel())
     im.save(filename, format='PNG')
+
+def to_one_hot(y_tensor, n_dims=None):
+    """
+    Take integer y (tensor or variable) with n dims &
+    convert it to 1-hot representation with n+1 dims.
+    """
+    _,h,w = y_tensor.size()
+    y_tensor = y_tensor.type(torch.LongTensor).view(-1, 1)
+    n_dims = n_dims or (int(torch.max(y_tensor)) + 1)
+    y_one_hot = torch.zeros(y_tensor.size()[0], n_dims).scatter_(1, y_tensor, 1)
+    y_one_hot = y_one_hot.view(h, w, n_dims)
+    return y_one_hot.permute(2, 0, 1) # CHW
+
+def norm_mask(mask):
+    c, h, w = mask.shape
+    for cnt in range(c):
+        mask_cnt = mask[cnt, :, :]
+        if(mask_cnt.max() > 0):
+            mask_cnt = (mask_cnt - mask_cnt.min())
+            mask_cnt = mask_cnt/mask_cnt.max()
+            mask[cnt, :, :] = mask_cnt
+    return mask
 
 
 # if __name__=="__main__":
