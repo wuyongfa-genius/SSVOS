@@ -138,7 +138,7 @@ def main():
             seg_tar = F.interpolate(seg_tar, scale_factor=args.out_stride,
                                     mode='bicubic', align_corners=False, recompute_scale_factor=False)
             seg_tar = norm_mask(seg_tar[0])
-            seg_tar = torch.argmax(seg_tar, dim=0)
+            seg_tar = torch.argmax(seg_tar, dim=0) # HW
             # saving to disk
             seg_tar = seg_tar.cpu().numpy().astype(np.uint8)
             seg_tar = np.array(Image.fromarray(
@@ -150,7 +150,7 @@ def main():
     if accelerator.is_main_process:
         bar.close()
     accelerator.print(
-        f'All videos has been evaludated, results saved at {args.data_path}.')
+        f'All videos has been tested, results saved at {args.data_path}.')
 
 
 if __name__ == "__main__":
