@@ -53,7 +53,7 @@ class MLP(nn.Module):
         super().__init__()
         if isinstance(hidden_dim, int):
             self.mlp = nn.Sequential(
-                nn.Linear(feat_dim, hidden_dim),
+                nn.Linear(feat_dim, hidden_dim), # should set bias to False, cause it's followed by BN
                 nn.BatchNorm1d(hidden_dim),
                 nn.ReLU(inplace=True),
                 nn.Linear(hidden_dim, out_dim)
@@ -61,13 +61,13 @@ class MLP(nn.Module):
         elif isinstance(hidden_dim, (list, tuple)):  # two hidden layers
             assert len(hidden_dim) == 2
             self.mlp = nn.Sequential(
-                nn.Linear(feat_dim, hidden_dim[0]),
+                nn.Linear(feat_dim, hidden_dim[0]), # should set bias to False, cause it's followed by BN
                 nn.BatchNorm1d(hidden_dim[0]),
                 nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim[0], hidden_dim[1]),
+                nn.Linear(hidden_dim[0], hidden_dim[1]), # should set bias to False, cause it's followed by BN
                 nn.BatchNorm1d(hidden_dim[1]),
                 nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim[1], out_dim),
+                nn.Linear(hidden_dim[1], out_dim), # should set bias to False, cause it's followed by BN
                 nn.BatchNorm1d(out_dim, affine=False)
             )
         self.apply(self._init_weights)

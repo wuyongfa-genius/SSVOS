@@ -150,7 +150,7 @@ def main():
     if accelerator.is_main_process:
         bar.close()
     accelerator.print(
-        f'All videos has been tested, results saved at {args.data_path}.')
+        f'All videos has been tested, results saved at {args.output_dir}.')
 
 
 if __name__ == "__main__":
