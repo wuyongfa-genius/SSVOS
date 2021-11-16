@@ -6,6 +6,6 @@ setup(name='SSVOS',
       author='wuyongfa, ly',
       author_email='',
       url='https://github.com/wuyongfa-genius/SSVOS.git',
-      install_requires=['torchvision', 'timm', 'einops', 'accelerate', 'decord', 'spatial_correlation_sampler'],
+      install_requires=['torchvision', 'timm', 'einops', 'accelerate', 'decord', ], #'spatial_correlation_sampler'
       packages=find_packages()
       )
