@@ -177,11 +177,11 @@ class MoCo_ResNet_K_SVD(MoCo):
         similarity_matrix = F.cosine_similarity(q, k)
         ## make label mask
         world_size = dist.get_world_size()
+        rank = dist.get_rank()
         label_mask = torch.zeros((world_size*B*T, B*T), dtype=torch.bool).cuda()
         # positive pairs only exist at the same device
-        labels = [torch.ones((T,T), dtype=torch.bool).cuda() for _ in range(B)]
+        labels = [torch.ones((T,T), dtype=torch.bool).to(rank) for _ in range(B)]
         pos_area_label_mask = torch.block_diag(*labels) #(BT)*(BT)
-        rank = dist.get_rank()
         label_mask[rank*B*T:(rank+1)*B*T,:] = pos_area_label_mask
         ## compute InfoNCE loss
         logits_matrix = torch.exp(similarity_matrix/self.T)

@@ -55,7 +55,7 @@ class Learnable_K_SVD(nn.Module):
         M2 = 1/self.c*(torch.matmul(self.dictionary.T, x.T)) # N*B
         alpha = soft_thresh(M2, thresh) # N*B
         for _ in range(self.iters):
-            alpha = soft_thresh(torch.matmul(M1, alpha)+M2, lamd)
+            alpha = soft_thresh(torch.matmul(M1, alpha)+M2, thresh)
         ## reconstruct x from alpha and dict
         reconstructed_x = torch.matmul(self.dictionary, alpha).T
         return reconstructed_x
